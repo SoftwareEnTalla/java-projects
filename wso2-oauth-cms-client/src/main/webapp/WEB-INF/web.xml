@@ -1,0 +1,64 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<web-app xmlns="http://java.sun.com/xml/ns/javaee"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://java.sun.com/xml/ns/javaee http://java.sun.com/xml/ns/javaee/web-app_3_0.xsd"
+         version="3.0">
+
+  <display-name>Testing</display-name>
+
+  <description>Testing</description>
+
+  <!-- Spring Application Context location -->
+  <context-param>
+    <description>Spring config file location</description>
+    <param-name>contextConfigLocation</param-name>
+    <param-value>/WEB-INF/web-application-context.xml</param-value>
+  </context-param>
+
+  <context-param>
+    <description>Do not try to resolve web app root as file</description>
+    <param-name>log4jExposeWebAppRoot</param-name>
+    <param-value>false</param-value>
+  </context-param>
+
+
+  <filter>
+    <description>Filtro de control para Wso2 Identity Server con OAuth2 Authentication</description>
+    <filter-name>Wso2 OAuth2AuthenticationFilter</filter-name>
+    <filter-class>cu.entalla.filter.OAuth2AuthenticationFilter</filter-class>
+    <init-param>
+      <param-name>beanName</param-name>
+      <param-value>GlobalAuthenticationFilter</param-value>
+    </init-param>
+  </filter>
+
+  <filter-mapping>
+    <filter-name>Wso2 OAuth2AuthenticationFilter</filter-name>
+    <url-pattern>/wso2/oauth2/*</url-pattern>
+  </filter-mapping>
+
+  <servlet>
+    <servlet-name>OAuth2CallbackServlet</servlet-name>
+    <servlet-class>cu.entalla.security.client.oauth2.OAuth2CallbackServlet</servlet-class>
+  </servlet>
+
+  <servlet>
+    <servlet-name>OAuth2LoginServlet</servlet-name>
+    <servlet-class>cu.entalla.security.client.oauth2.OAuth2LoginServlet</servlet-class>
+  </servlet>
+
+
+
+  <servlet-mapping>
+    <servlet-name>OAuth2LoginServlet</servlet-name>
+    <url-pattern>/wso2/oauth2/login</url-pattern>
+  </servlet-mapping>
+
+  <servlet-mapping>
+    <servlet-name>OAuth2CallbackServlet</servlet-name>
+    <url-pattern>/wso2/oauth2/callback</url-pattern>
+  </servlet-mapping>
+
+
+
+</web-app>

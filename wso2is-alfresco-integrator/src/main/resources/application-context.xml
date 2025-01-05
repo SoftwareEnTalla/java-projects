@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+                           http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd">
+
+    <!-- Importar los contextos estándar de Alfresco -->
+    <import resource="classpath:alfresco/service-context.xml" />
+    <import resource="classpath:alfresco/dao-context.xml" />
+    <import resource="classpath:alfresco/web-client-config.xml" />
+
+    <!-- Cargar propiedades desde alfresco-global.properties -->
+    <bean class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+        <property name="location" value="classpath:alfresco-global.properties" />
+    </bean>
+
+    <!-- Registrar ClientRegistrationRepository -->
+    <bean id="clientRegistrationRepository" class="org.springframework.security.oauth2.client.registration.InMemoryClientRegistrationRepository">
+        <constructor-arg>
+            <list>
+                <bean class="org.springframework.security.oauth2.client.registration.ClientRegistration.Builder">
+                    <constructor-arg value="wso2" />
+                    <property name="clientId" value="${oauth2.wso2.client-id}" />
+                    <property name="clientSecret" value="${oauth2.wso2.client-secret}" />
+                    <property name="authorizationGrantType" value="${oauth2.wso2.authorization-grant-type}" />
+                    <property name="redirectUri" value="${oauth2.wso2.redirect-uri}" />
+                    <property name="scope" value="${oauth2.wso2.scope}" />
+                    <property name="provider">
+                        <bean class="org.springframework.security.oauth2.client.registration.ClientRegistration.ProviderDetails">
+                            <property name="authorizationUri" value="${oauth2.wso2.authorization-uri}" />
+                            <property name="tokenUri" value="${oauth2.wso2.token-uri}" />
+                            <property name="userInfoUri" value="${oauth2.wso2.user-info-uri}" />
+                        </bean>
+                    </property>
+                </bean>
+            </list>
+        </constructor-arg>
+    </bean>
+
+    <!-- Registrar Servlet para OAuth2 Callback -->
+    <bean id="oauth2CallbackServlet" class="cu.entalla.security.client.oauth2.OAuth2CallbackServlet">
+        <constructor-arg ref="clientRegistrationRepository" />
+    </bean>
+
+    <!-- Escaneo de componentes del proyecto -->
+    <context:component-scan base-package="cu.entalla" />
+
+    <!-- Otros beans -->
+    <bean id="userService" class="cu.entalla.app.service.UserService" />
+</beans>

@@ -1,0 +1,9 @@
+<archetype>
+  <id>wso2is.alfresco.integrator.client.auth2</id>
+  <sources>
+    <source>src/main/java/app/AlfrescoOAuthApplication.java</source>
+  </sources>
+  <testSources>
+    <source>src/test/java/app/AlfrescoOAuthApplicationTest.java</source>
+  </testSources>
+</archetype>
