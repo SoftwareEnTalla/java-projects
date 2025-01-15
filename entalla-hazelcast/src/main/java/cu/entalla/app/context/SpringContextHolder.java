@@ -1,6 +1,8 @@
 package cu.entalla.app.context;
 
+import com.hazelcast.client.impl.protocol.task.AddDistributedObjectListenerMessageTask;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.core.LifecycleEvent;
 import com.hazelcast.map.IMap;
 import com.hazelcast.nio.serialization.Serializer;
 import cu.entalla.config.HazelCastConfig;
@@ -15,56 +17,88 @@ import org.springframework.extensions.config.source.FileConfigSource;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
-public class SpringContextHolder  {
+public class SpringContextHolder {
     private static ApplicationContext context;
-
     private static HazelcastInstance hazelcastInstance;
-    private static IMap<String, ApplicationContext> contextRegistry;
+    private static IMap<String, ApplicationContext> contextRegistryHazelcast;
+    private static IMap<String, Class<? extends Serializer>> globalRegistryHazelcast;
+    private static Map<String, ApplicationContext> contextRegistryHashMap = new HashMap<>();
+    private static Map<String, Class<? extends Serializer>> globalRegistryHashMap = new HashMap<>();
 
-    private static IMap<String, Class<? extends Serializer>> globalRegistry;
+    private static final Log logger = LogFactory.getLog(SpringContextHolder.class);
 
-    private static final Log logger = LogFactory.getLog(ApplicationContext.class);
-    public static void setApplicationContext(String contextName, ApplicationContext context) throws Exception {
-        if (contextName == null || context == null) {
+    private static String registryMode = "default"; // Valores posibles: "default" o "cluster"
+
+    public static void setRegistryMode(String mode) {
+        if (!mode.equals("default") && !mode.equals("cluster")) {
+            throw new IllegalArgumentException("El modo debe ser 'default' o 'cluster'.");
+        }
+        registryMode = mode;
+    }
+
+    public static void setApplicationContext(String contextName, ApplicationContext applicationContext) throws Exception {
+        if (contextName == null || applicationContext == null) {
             throw new Exception("El nombre o el contexto no pueden ser null.");
         }
-        if(contextRegistry==null)
-             contextRegistry =hazelcastClassPathInstance().getMap("contextRegistry");
-        contextRegistry.put(contextName, context);
+
+        if (registryMode.equals("default")) {
+            contextRegistryHashMap.put(contextName, applicationContext);
+        } else {
+            if (contextRegistryHazelcast == null) {
+                initializeHazelcastContextRegistry();
+            }
+            contextRegistryHazelcast.put(contextName, applicationContext);
+        }
         logger.info("Contexto registrado: " + contextName);
     }
 
-    public static void setApplicationContext(String hazelCastInstanceName,String hazelCastConfigFile, String contextName, ApplicationContext context) throws Exception {
-        if (contextName == null || context == null) {
-            throw new Exception("El nombre o el contexto no pueden ser null.");
+    public static IMap<String, ApplicationContext> getContextRegistryHazelcast() {
+        if (contextRegistryHazelcast == null) {
+            initializeHazelcastContextRegistry();
         }
-        if(contextRegistry==null)
-            contextRegistry =hazelcastFromFileInstance(hazelCastInstanceName,hazelCastConfigFile).getMap("contextRegistry");
-        contextRegistry.put(contextName, context);
-        logger.info("Contexto registrado: " + contextName);
+        return contextRegistryHazelcast;
     }
 
-    public static   IMap<String, ApplicationContext> getContextRegistry(){
-        return contextRegistry;
+    public static Map<String, ApplicationContext> getContextRegistryHashMap() {
+        return contextRegistryHashMap;
+    }
+
+    public static Map<String, Class<? extends Serializer>> getGlobalRegistryHashMap() {
+        return globalRegistryHashMap;
+    }
+
+    public static IMap<String, Class<? extends Serializer>> getGlobalRegistryHazelcast() {
+        if (globalRegistryHazelcast == null) {
+            initializeHazelcastGlobalRegistry();
+        }
+        return globalRegistryHazelcast;
+    }
+
+    public static Object getBean(String contextName, String beanName) {
+        ApplicationContext appContext = registryMode.equals("default") ?
+                contextRegistryHashMap.get(contextName) :
+                getContextRegistryHazelcast().get(contextName);
+        if (appContext != null) {
+            return appContext.getBean(beanName);
+        }
+        return null;
     }
 
     public static   IMap<String, Class<? extends com.hazelcast.nio.serialization.Serializer>> getGlobalRegistry(){
-        return globalRegistry=hazelcastClassPathInstance().getMap("globalRegistry");
+        return globalRegistryHazelcast=hazelcastClassPathInstance().getMap("globalRegistry");
     }
     public static   IMap<String, Class<? extends com.hazelcast.nio.serialization.Serializer>> getGlobalRegistry(String instanceName,String fileConfig) throws FileNotFoundException {
-        return globalRegistry=hazelcastFromFileInstance(instanceName,fileConfig).getMap("globalRegistry");
-    }
-    public static   IMap<String, Class<? extends com.hazelcast.nio.serialization.Serializer>> registry(String key,Class<? extends com.hazelcast.nio.serialization.Serializer> value){
-        globalRegistry = getGlobalRegistry();
-        globalRegistry.put(key,value);
-        return globalRegistry;
+        return globalRegistryHazelcast=hazelcastFromFileInstance(instanceName,fileConfig).getMap("globalRegistry");
     }
     public static HazelcastInstance hazelcastClassPathInstance(){
         if(hazelcastInstance==null){
+            logger.error(":::::::::::::::::::::::: Se comienza a inicializar instancia de HazelCast ::::::::::::::::::::::::");
             HazelCastConfig segConfig= HazelCastConfig.getInstance();
             hazelcastInstance = segConfig.hazelcastClassPathInstance();// Hazelcast.newHazelcastInstance();
-            contextRegistry = hazelcastInstance.getMap("contextRegistry");
+            contextRegistryHazelcast = hazelcastInstance.getMap("contextRegistry");
             getGlobalRegistry();
         }
         //hazelcastInstance.addDistributedObjectListener(new AddDistributedObjectListenerMessageTask())
@@ -72,119 +106,81 @@ public class SpringContextHolder  {
     }
     public static HazelcastInstance hazelcastFromFileInstance(String name,String file) throws FileNotFoundException {
         if(hazelcastInstance==null){
+            logger.error(":::::::::::::::::::::::: Se comienza a inicializar instancia de HazelCast:"+name+" ::::::::::::::::::::::::");
             HazelCastConfig segConfig= HazelCastConfig.getInstance();
             hazelcastInstance = segConfig.hazelcastFromFileInstance(name,file);// Hazelcast.newHazelcastInstance();
-            contextRegistry = hazelcastInstance.getMap("contextRegistry");
+            contextRegistryHazelcast = hazelcastInstance.getMap("contextRegistry");
             getGlobalRegistry();
         }
-        //hazelcastInstance.addDistributedObjectListener(new AddDistributedObjectListenerMessageTask())
+        //hazelcastInstance.addDistributedObjectListener(new AddDistributedObjectListenerMessageTask());
         return hazelcastInstance;
     }
+    private static void initializeHazelcastContextRegistry() {
+        logger.error(":::::::::::::::::::::::: Se comienza a inicializar instancia de HazelCast ::::::::::::::::::::::::");
+        HazelCastConfig segConfig = HazelCastConfig.getInstance();
+        hazelcastInstance = segConfig.hazelcastClassPathInstance();
+        hazelcastInstance.getLifecycleService().addLifecycleListener(event -> {
+            if (event.getState() == LifecycleEvent.LifecycleState.SHUTTING_DOWN) {
+                hazelcastInstance.shutdown();
+            }
+        });
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("Apagando la JVM. Cerrando Hazelcast...");
+            hazelcastInstance.shutdown();
+        }));
+        contextRegistryHazelcast = hazelcastInstance.getMap("contextRegistry");
+    }
 
-    public static ConfigService loadShareConfiguration(ApplicationContext alfrescoContext,String filePath) {
-        ConfigService configService = alfrescoContext.getBean("web.config", ConfigService.class);
+    private static void initializeHazelcastGlobalRegistry() {
+        if (hazelcastInstance == null) {
+            initializeHazelcastContextRegistry();
+        }
+       globalRegistryHazelcast = hazelcastInstance.getMap("globalRegistry");
+    }
+
+    public static void registry(String key, Class<? extends Serializer> value) {
+        if (registryMode.equals("default")) {
+            globalRegistryHashMap.put(key, value);
+        } else {
+            if (globalRegistryHazelcast == null) {
+                initializeHazelcastGlobalRegistry();
+            }
+            globalRegistryHazelcast.put(key, value);
+        }
+    }
+
+    public static ApplicationContext getApplicationContext(String contextName) {
+        return registryMode.equals("default") ?
+                contextRegistryHashMap.get(contextName) :
+                getContextRegistryHazelcast().get(contextName);
+    }
+
+    public static ConfigService loadShareConfiguration(ApplicationContext context, String filePath) {
+        ConfigService configService = context.getBean("web.config", ConfigService.class);
         try {
             File shareConfigFile = new File(filePath);
             if (shareConfigFile.exists()) {
                 configService.appendConfig(new ClassPathConfigSource(Arrays.asList(
-                        "alfresco/web-extension",  // Ruta típica de configuraciones de Alfresco Share
-                        "alfresco/extension"       // Ruta típica para configuraciones personalizadas
+                        "alfresco/web-extension",
+                        "alfresco/extension"
                 )));
                 configService.appendConfig(new FileConfigSource(filePath));
-               logger.info("Loaded "+filePath+" into Alfresco context.");
+                logger.info("Loaded " + filePath + " into context.");
             } else {
-                logger.warn(filePath+" not found.");
+                logger.warn(filePath + " not found.");
             }
         } catch (Exception e) {
-            logger.error("Error loading "+filePath+": ", e);
+            logger.error("Error loading " + filePath + ": ", e);
         }
         return configService;
     }
-    public static ApplicationContext getApplicationContext(String contextName){
-        if(contextRegistry==null)
-            contextRegistry=hazelcastClassPathInstance().getMap("contextRegistry");
-        return contextRegistry!=null && contextRegistry.containsKey(contextName)? contextRegistry.get(contextName):null;
-    }
-    public static void registry(String contextName,ApplicationContext context) throws Exception {
-        if(contextName==null)
-            throw new Exception("La clave de registro del contexto no puede ser null.");
-        if(context==null)
-             throw new Exception("El contexto no puede ser null.");
-        logger.error(":::::::::::::::::::::::: Se registra el Contexto para "+contextName+" de forma satisfactoria ::::::::::::::::::::::::");
-        logger.error(":::::::::::::::::::::::: Se registra el Contexto para la aplicación:"+context.getApplicationName()+" de forma satisfactoria ::::::::::::::::::::::::");
-        contextRegistry.putIfAbsent(contextName,context);
-    }
 
     public static <T> T getBean(Class<T> requiredType) {
-
         try {
-            return context!=null?context.getBean(requiredType):null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+requiredType+"\nDesciption:"+be.getMessage());
+            return context != null ? context.getBean(requiredType) : null;
+        } catch (BeansException be) {
+            logger.error("Error al devolver el Bean:" + requiredType + "\nDescripcion:" + be.getMessage());
         }
         return null;
     }
-    public static <T> T getBean(String name,Class<T> requiredType) {
-
-        try {
-            return context!=null?context.getBean(name,requiredType):null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+name+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-    public static <T> T getBean(Class<T> requiredType,Object... args) {
-
-        try {
-            return context!=null?context.getBean(requiredType,args) :null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+requiredType+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-    public static Object getBean(String name) {
-        try {
-            return context != null ? context.getBean(name) : null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+name+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-    public static Object getBean(String name,Object... args) {
-
-        try {
-            return context!=null?context.getBean(name,args) :null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+name+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-    public static Object getBean(ApplicationContext appContext,String name,Object... args) {
-
-        try {
-            return appContext!=null?appContext.getBean(name,args) :null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+name+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-    public static Object getBean(String contextName,String name,Object... args) {
-
-        try {
-            ApplicationContext appContext=getApplicationContext(contextName);
-            return appContext!=null?appContext.getBean(name,args) :null;
-        }
-        catch (BeansException be){
-            logger.error("Error al devolver el Bean:"+name+"\nDesciption:"+be.getMessage());
-        }
-        return null;
-    }
-
-
 }

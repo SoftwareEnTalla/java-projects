@@ -4,20 +4,21 @@ import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
-import lombok.*;
+import lombok.Getter;
 
 import java.io.IOException;
-import java.net.URLEncoder;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.logging.Logger;
 
- @Getter
+@Getter
 public class CookieManager {
 
     HttpServletResponse response;
     HttpServletRequest request;
     HttpSession session;
     private static CookieManager _instance;
+    private static final Logger logger = Logger.getLogger(CookieManager.class.getName());
 
     private CookieManager(){
 
@@ -32,17 +33,17 @@ public class CookieManager {
             this.request=request;
             setSession(this.request.getSession());
         }
-        return this;
+        return updateState();
     }
     public CookieManager setResponse(HttpServletResponse response){
         if(response!=null){
             this.response=response;
         }
-        return this;
+        return updateState();
     }
      public CookieManager setSession(HttpSession session){
          this.session=session;
-         return this;
+         return updateState();
     }
      public HttpSession getSession(){
          return this.session;
@@ -53,8 +54,10 @@ public class CookieManager {
         return CookieManager._instance.updateState();
     }
     public CookieManager addCookie(Cookie cookie){
-        if(response!=null)
+        if(response!=null) {
+            cookie.setSecure(true);
             response.addCookie(cookie);
+        }
         return updateState();
     }
     public CookieManager addCookie(String cookieName,String cookieValue,String uri,boolean isHttpOnly){
@@ -62,9 +65,30 @@ public class CookieManager {
             Cookie cookie = new Cookie(cookieName, cookieValue);
             cookie.setPath(uri);
             cookie.setHttpOnly(isHttpOnly);
+            cookie.setDomain("entalla.cu");
             response.addCookie(cookie);
+
         }
         return updateState();
+    }
+    public  String getCookieValueByName(String name){
+       Cookie cookie=getCookieByName(name);
+       if(cookie!=null) {
+           logger.info("Getting Cookie "+name+" with value:"+cookie.getValue());
+           return cookie.getValue();
+       }
+       return null;
+    }
+    public  Cookie getCookieByName(String name){
+        Cookie[] cookies = request.getCookies()!=null?request.getCookies():new Cookie[0];
+        if(cookies!=null)
+        for (int i=0;i<cookies.length;i++) {
+            String cookieName=cookies[i].getName();
+            if(cookieName.equals(name))
+                return cookies[i];
+        }
+        logger.info("Do not exist any cookie with name:"+name);
+        return null;
     }
     public CookieManager addCookie(String cookieName,String cookieValue,String uri,String comment,String domain,int expireIn,int version,boolean isHttpOnly,boolean isSecure){
         if(response!=null){

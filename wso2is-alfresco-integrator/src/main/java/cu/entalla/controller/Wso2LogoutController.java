@@ -1,19 +1,19 @@
 package cu.entalla.controller;
 
-
 import cu.entalla.config.Wso2Config;
+import cu.entalla.handlers.Wso2LogoutHandler;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import java.io.IOException;
+
 import org.springframework.context.ApplicationContext;
 import org.springframework.extensions.surf.mvc.LogoutController;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.web.context.support.WebApplicationContextUtils;
 import org.springframework.web.servlet.ModelAndView;
 import org.springframework.web.servlet.mvc.AbstractController;
-
-import java.io.IOException;
 
 public class Wso2LogoutController extends AbstractController {
     protected Wso2Config config;
@@ -42,7 +42,7 @@ public class Wso2LogoutController extends AbstractController {
                 this.wso2LogoutHandler = (Wso2LogoutHandler)this.applicationContext.getBean(Wso2LogoutHandler.class);
                 HttpSession session = request.getSession(false);
                 if (session != null) {
-                    String userId = (String)session.getAttribute("_alf_USER_ID");
+                    String userId = (String)session.getAttribute("X-Alfresco-Remote-User");
                     if (userId != null) {
                         SecurityContext account = (SecurityContext)session.getAttribute("SPRING_SECURITY_CONTEXT");
                         if (account != null) {

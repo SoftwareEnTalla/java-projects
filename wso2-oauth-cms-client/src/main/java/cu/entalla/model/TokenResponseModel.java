@@ -11,15 +11,16 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 import org.json.JSONObject;
 
+import java.io.Serializable;
 import java.util.Timer;
 import java.util.Base64;
 import java.util.Date;
 import java.util.TimerTask;
-
+import java.util.function.Function;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class TokenResponseModel implements EventHandler {
+public class TokenResponseModel implements EventHandler, Serializable {
 
     @JsonProperty("access_token")
     private String accessToken;
@@ -140,6 +141,17 @@ public class TokenResponseModel implements EventHandler {
     public String toJson() throws JsonProcessingException {
         ObjectMapper mapper = new ObjectMapper();
         return mapper.writeValueAsString(this);
+    }
+
+    /**
+     * Método genérico para procesar datos de TokenResponseModel.
+     *
+     * @param processor La función que procesa la instancia.
+     * @param returnType El tipo de clase que se espera como resultado.
+     * @return Un objeto del tipo especificado en returnType.
+     */
+    public <T> T process(Function<TokenResponseModel, T> processor, Class<T> returnType) {
+        return processor.apply(this);
     }
 }
 

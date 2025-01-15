@@ -39,7 +39,6 @@ public class AuthenticationStore {
     }
 
     public void setWso2SecurityConfig(Wso2SecurityConfig wso2SecurityConfig){
-         //setClientRegistrationRepository(wso2SecurityConfig !=null? wso2SecurityConfig.clientRegistrationRepository():null);
          if(wso2SecurityConfig !=null && wso2SecurityConfig.getClientId()!=null)
           AuthenticationStore.getInstance().wso2SecurityConfig =this.wso2SecurityConfig = wso2SecurityConfig;
     }

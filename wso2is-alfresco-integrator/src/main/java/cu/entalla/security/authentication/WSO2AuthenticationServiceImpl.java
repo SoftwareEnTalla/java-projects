@@ -1,10 +1,21 @@
 package cu.entalla.security.authentication;
 
-import com.nimbusds.jwt.JWTClaimsSet;
-import com.nimbusds.jwt.SignedJWT;
+import com.nimbusds.jose.*;
+import com.nimbusds.jose.crypto.RSADecrypter;
+import com.nimbusds.jose.crypto.RSAEncrypter;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jwt.*;
 import cu.entalla.client.Wso2AuthenticatorClient;
 import cu.entalla.config.Wso2SecurityConfig;
+import cu.entalla.service.ServiceLocator;
 import cu.entalla.store.AuthenticationStore;
+import cu.entalla.udi.ClientServiceIntegration;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpSession;
+import lombok.AllArgsConstructor;
+import lombok.Builder;
+import lombok.Data;
 import net.sf.acegisecurity.Authentication;
 import org.alfresco.repo.cache.DefaultSimpleCache;
 import org.alfresco.repo.cache.TransactionalCache;
@@ -22,9 +33,14 @@ import org.alfresco.service.cmr.security.AuthorityService;
 import org.alfresco.service.cmr.security.MutableAuthenticationService;
 import org.alfresco.service.cmr.security.PersonService;
 import org.alfresco.service.namespace.QName;
+import org.springframework.extensions.surf.exception.RequestContextException;
+import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenResponse;
+import org.springframework.security.oauth2.core.oidc.OidcIdToken;
 import org.springframework.stereotype.Component;
 
 import java.io.Serializable;
+import java.security.interfaces.RSAPrivateKey;
+import java.security.interfaces.RSAPublicKey;
 import java.text.ParseException;
 import java.util.Date;
 import java.util.HashMap;
@@ -58,6 +74,10 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
     private final MutableAuthenticationService mutableAuthenticationService=new MutableAuthenticationServiceImpl();
     private static final Logger logger = Logger.getLogger(WSO2AuthenticationServiceImpl.class.getName());
 
+    private HttpSession session;
+    private HttpServletRequest request;
+
+    private HttpServletResponse response;
 
     public WSO2AuthenticationServiceImpl(String providerId) {
         super();
@@ -114,6 +134,208 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
         logger.info("Inicializada instancia de WSO2AuthenticationServiceImpl con providerId=wso2 por defecto.");
     }
 
+    public OidcIdToken createOidcToken(RSAPublicKey publicKey,RSAPrivateKey privateKey,OAuth2AccessTokenResponse accessTokenResponse,String tokenKey) throws Exception {
+        String jwtToken =(String)accessTokenResponse.getAdditionalParameters().get(tokenKey);
+        JWT jwt = JWTParser.parse(jwtToken);
+
+        if (verifyJwtSignature(jwtToken,publicKey)) {
+            // JWT firmado
+            SignedJWT signedJWT = (SignedJWT) jwt;
+            JWSHeader header = signedJWT.getHeader();
+            System.out.println("Algoritmo de firma: " + header.getAlgorithm());
+            System.out.println("Tipo: " + header.getType());
+        } else if (verifyJwtCypher(jwtToken,privateKey)) {
+            // JWT cifrado
+            EncryptedJWT encryptedJWT = (EncryptedJWT) jwt;
+            JWEHeader header = encryptedJWT.getHeader();
+            PayLoadEncryptedJWT payload = decryptJwt(jwtToken, privateKey);
+            // Obtener las reclamaciones del JWT (esto será un conjunto de claves-valor que contiene los datos del token)
+            JWTClaimsSet claimsSet = payload.getEncripted().getJWTClaimsSet();
+            // Obtener las reclamaciones necesarias para OidcIdToken
+            Date issuedAt = claimsSet.getIssueTime();
+            Date expiresAt = claimsSet.getExpirationTime();
+            Map<String, Object> claims = claimsSet.getClaims();
+            System.out.println("Algoritmo de cifrado (clave): " + header.getAlgorithm());
+            System.out.println("Algoritmo de cifrado (contenido): " + header.getEncryptionMethod());
+            OidcIdToken idToken = new OidcIdToken(jwtToken,issuedAt.toInstant(), expiresAt.toInstant(), claims);
+           return idToken;
+        } else {
+            System.out.println("Tipo de token no reconocido");
+        }
+       // OidcIdToken oidc=new OidcIdToken()
+        return null;
+    }
+    public JWSHeader getJWSHeader(RSAPublicKey publicKey,RSAPrivateKey privateKey,OAuth2AccessTokenResponse accessTokenResponse,String tokenKey) throws Exception {
+        String jwtToken =(String)accessTokenResponse.getAdditionalParameters().get(tokenKey);
+        JWT jwt = JWTParser.parse(jwtToken);
+
+        if (verifyJwtSignature(jwtToken,publicKey)) {
+            // JWT firmado
+            SignedJWT signedJWT = (SignedJWT) jwt;
+            return signedJWT.getHeader();
+        }
+        return null;
+    }
+    public JWEHeader getJWEHeader(RSAPublicKey publicKey,RSAPrivateKey privateKey,OAuth2AccessTokenResponse accessTokenResponse,String tokenKey) throws Exception {
+        String jwtToken =(String)accessTokenResponse.getAdditionalParameters().get(tokenKey);
+        JWT jwt = JWTParser.parse(jwtToken);
+
+        if (verifyJwtCypher(jwtToken,privateKey)) {
+            // JWT cifrado
+            EncryptedJWT encryptedJWT = (EncryptedJWT) jwt;
+            return encryptedJWT.getHeader();
+        }
+        return null;
+    }
+
+    // Método para verificar la firma del JWT
+    public static boolean verifyJwtSignature(String jwtToken, RSAPublicKey publicKey) throws Exception {
+        // Decodificar el JWT
+        JWT jwt = JWTParser.parse(jwtToken);
+
+        if (jwt instanceof SignedJWT) {
+            SignedJWT signedJWT = (SignedJWT) jwt;
+
+            // Obtener el encabezado y el algoritmo de firma
+            JWSHeader header = signedJWT.getHeader();
+            JWSAlgorithm algorithm = header.getAlgorithm();
+            System.out.println("Algoritmo de firma: " + algorithm);
+
+            // Verificador de la firma con la clave pública
+            JWSVerifier verifier = new RSASSAVerifier(publicKey);
+
+            // Verificar la firma
+            boolean isSignatureValid = signedJWT.verify(verifier);
+            if (isSignatureValid) {
+                System.out.println("Firma verificada correctamente.");
+                return true;
+            } else {
+                System.out.println("Firma no válida.");
+                return false;
+            }
+        } else {
+            System.out.println("El JWT no es un JWT firmado.");
+            return false;
+        }
+    }
+    // Método para verificar y descifrar el JWT cifrado
+    public PayLoadEncryptedJWT decryptJwt(String jwtToken, RSAPrivateKey privateKey) throws Exception {
+        // Decodificar el JWT
+        JWT jwt = JWTParser.parse(jwtToken);
+
+        if (jwt instanceof EncryptedJWT) {
+            EncryptedJWT encryptedJWT = (EncryptedJWT) jwt;
+
+            // Obtener el encabezado JWE (información sobre el algoritmo de cifrado)
+            JWEHeader jweHeader = encryptedJWT.getHeader();
+            JWEAlgorithm jweAlgorithm = jweHeader.getAlgorithm();
+            EncryptionMethod encryptionMethod = jweHeader.getEncryptionMethod();
+
+            System.out.println("Algoritmo de cifrado: " + jweAlgorithm);
+            System.out.println("Método de cifrado: " + encryptionMethod);
+
+            // Desencriptar el JWT utilizando la clave privada
+            RSADecrypter decrypter = new RSADecrypter(privateKey);
+            encryptedJWT.decrypt(decrypter);
+            // Una vez descifrado, obtén las reclamaciones
+            JWTClaimsSet claimsSet = encryptedJWT.getJWTClaimsSet();
+            // Obtener la carga útil decodificada
+            String payload = encryptedJWT.getPayload().toString();
+            return new PayLoadEncryptedJWT(payload,encryptedJWT);
+        } else {
+            System.out.println("El JWT no es un JWT cifrado.");
+            return null;
+        }
+    }
+
+    // Método auxiliar para construir el OidcIdToken
+    private static OidcIdToken buildOidcIdToken(JWTClaimsSet claimsSet, String idToken) {
+        Date issuedAt = claimsSet.getIssueTime();
+        Date expiresAt = claimsSet.getExpirationTime();
+        Map<String, Object> claims = claimsSet.getClaims();
+
+        // Construir la instancia de OidcIdToken usando los valores extraídos
+        return new OidcIdToken(idToken, issuedAt.toInstant(), expiresAt.toInstant(), claims);
+    }
+    // Método para verificar y descifrar el JWT cifrado, retorna true si el cifrado es válido
+    public static boolean verifyJwtCypher(String jwtToken, RSAPrivateKey privateKey) {
+        try {
+            // Decodificar el JWT
+            JWT jwt = JWTParser.parse(jwtToken);
+
+            if (jwt instanceof EncryptedJWT) {
+                EncryptedJWT encryptedJWT = (EncryptedJWT) jwt;
+
+                // Obtener el encabezado JWE (información sobre el algoritmo de cifrado)
+                JWEHeader jweHeader = encryptedJWT.getHeader();
+                JWEAlgorithm jweAlgorithm = jweHeader.getAlgorithm();
+                EncryptionMethod encryptionMethod = jweHeader.getEncryptionMethod();
+
+                System.out.println("Algoritmo de cifrado: " + jweAlgorithm);
+                System.out.println("Método de cifrado: " + encryptionMethod);
+
+                // Desencriptar el JWT utilizando la clave privada
+                RSADecrypter decrypter = new RSADecrypter(privateKey);
+                encryptedJWT.decrypt(decrypter);
+
+                // Si llegamos aquí, significa que el cifrado fue válido
+                return true;
+            } else {
+                System.out.println("El JWT no es un JWT cifrado.");
+                return false;
+            }
+        } catch (Exception e) {
+            System.out.println("Error durante el descifrado o no es un JWT cifrado: " + e.getMessage());
+            return false;
+        }
+    }
+    // Método para decodificar la carga del JWT (solo si la firma es válida)
+    public static String decodeJwtPayload(String jwtToken, RSAPublicKey publicKey) throws Exception {
+        if (verifyJwtSignature(jwtToken, publicKey)) {
+            JWT jwt = JWTParser.parse(jwtToken);
+
+            // Decodificar la carga (payload) del JWT
+            String[] parts = jwtToken.split("\\.");
+            String payload = new String(java.util.Base64.getUrlDecoder().decode(parts[1]));
+            System.out.println("Carga decodificada: " + payload);
+            return payload;
+        } else {
+            System.out.println("La firma no es válida, no se puede decodificar el payload.");
+        }
+        return null;
+    }
+
+    public HttpSession getSession() {
+        return session;
+    }
+
+    public WSO2AuthenticationServiceImpl setSession(HttpSession session) {
+        this.session = session;
+        ServiceLocator.registerIntegrator(ServiceLocator.getIntegrator().setSession(session));
+        return this;
+    }
+
+    public HttpServletRequest getRequest() {
+        return request;
+    }
+
+    public WSO2AuthenticationServiceImpl setRequest(HttpServletRequest request) {
+        this.request = request;
+        this.session=request.getSession();
+        ServiceLocator.registerIntegrator(ServiceLocator.getIntegrator().setRequest(this.request).setSession(this.session));
+        return this;
+    }
+
+    public HttpServletResponse getResponse() {
+        return response;
+    }
+
+    public WSO2AuthenticationServiceImpl setResponse(HttpServletResponse response) {
+        this.response = response;
+        ServiceLocator.registerIntegrator(ServiceLocator.getIntegrator().setResponse(response));
+        return this;
+    }
+
     public void setProviderId(String providerId){
         this.providerId=providerId;
     }
@@ -128,9 +350,33 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
         return new Date(expirationMillis);
     }
     public String getTicket(String accessToken,boolean autoCreate){
+
         boolean isValid = validateTokenWithWSO2(accessToken);
         logger.info("validateTokenWithWSO2:"+isValid);
         Wso2SecurityConfig wso2SecurityConfig = AuthenticationStore.getInstance().getWso2SecurityConfig();
+        String ticketMode = wso2SecurityConfig.getPropertyByKey("oauth2.client.provider.wso2.ticket-mode","standar");
+        logger.info("ticketMode="+ticketMode);
+        logger.info("ticketMode='custom'"+(ticketMode=="custom"));
+        logger.info("ticketMode='custom'"+"custom".equals(ticketMode));
+        if(!"custom".equals(ticketMode)) {
+            logger.info("Iniciando generación standar de Ticket::::::::::::::::::::::::::::::");
+            ClientServiceIntegration ClientServiceIntegration= ServiceLocator.getIntegrator();
+            ClientServiceIntegration.setSession(this.session);
+            if(ClientServiceIntegration!=null){
+                logger.info("Instancia de ClientServiceIntegration inicializada satisfactoriamente::::::::::::::::::::::::::::::");
+                String username=getUsernameFromToken(accessToken);
+                logger.info("Se obtiene el usuario:"+username+" desde el accessToken");
+                try {
+                    ClientServiceIntegration.initRequestContext(request,response,session);
+                } catch (RequestContextException e) {
+                    logger.severe("ERROR en initRequestContext:::::::::::::::::::::::::::::\n"+e.getMessage());
+                }
+                String alfTicket = ClientServiceIntegration.getTicket(session.getId(), username, accessToken);
+                logger.info("Se obtiene el Ticket:"+alfTicket+" desde el accessToken");
+                return alfTicket;
+            }
+        }
+
         String validDuration=wso2SecurityConfig.getPropertyByKey("oauth2.client.provider.wso2.ticket-validDuration","PT2H");
         logger.info("Ticket-ValidDuration:"+validDuration);
         if(isValid){
@@ -177,7 +423,7 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
             cmp.setValidDuration(validDuration);
             cmp.setExpiryMode(expiryMode.name());
             String ticket= cmp.getCurrentTicket(user,autoCreate);
-            logger.info("Ticket generado:"+ticket);
+            logger.info("Ticket generado with ExpiryMode:"+ticket);
             return ticket;
         }
         return null;
@@ -240,7 +486,7 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
         logger.info("Ejecutando AuthenticationUtil.setRunAsUser("+username+")");
         AuthenticationUtil.setRunAsUser(username);
     }
-    private Map<String, Object> extractAdditionalPropertiesFromToken(String accessToken) {
+    public Map<String, Object> extractAdditionalPropertiesFromToken(String accessToken) {
         try {
             SignedJWT signedJWT = SignedJWT.parse(accessToken);
             JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
@@ -252,6 +498,42 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
             return additionalProperties;
         } catch (ParseException e) {
             throw new AuthenticationException("Error parsing access token for additional properties", e);
+        }
+    }
+    public String getUsernameFromToken(String accessToken) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("username");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token", e);
+        }
+    }
+    public String getExpireInFromToken(String accessToken) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getDateClaim("exp").toString();
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token", e);
+        }
+    }
+    public String getPhoneFromToken(String accessToken) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("phone");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token for phone", e);
+        }
+    }
+    public String getEmailFromToken(String accessToken) {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("email");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token for email", e);
         }
     }
     public void setAuthenticatedUserForShare(String username) {
@@ -300,42 +582,7 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
         return getAuthenticationService().isValidToken(accessToken);
     }
 
-    public String getUsernameFromToken(String accessToken) {
-        try {
-            SignedJWT signedJWT = SignedJWT.parse(accessToken);
-            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
-            return claims.getStringClaim("username");
-        } catch (ParseException e) {
-            throw new AuthenticationException("Error parsing access token", e);
-        }
-    }
-    public String getExpireInFromToken(String accessToken) {
-        try {
-            SignedJWT signedJWT = SignedJWT.parse(accessToken);
-            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
-            return claims.getDateClaim("exp").toString();
-        } catch (ParseException e) {
-            throw new AuthenticationException("Error parsing access token", e);
-        }
-    }
-    public String getPhoneFromToken(String accessToken) {
-        try {
-            SignedJWT signedJWT = SignedJWT.parse(accessToken);
-            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
-            return claims.getStringClaim("phone");
-        } catch (ParseException e) {
-            throw new AuthenticationException("Error parsing access token for phone", e);
-        }
-    }
-    public String getEmailFromToken(String accessToken) {
-        try {
-            SignedJWT signedJWT = SignedJWT.parse(accessToken);
-            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
-            return claims.getStringClaim("email");
-        } catch (ParseException e) {
-            throw new AuthenticationException("Error parsing access token for email", e);
-        }
-    }
+
     /**
      * Verifica si un usuario existe en Alfresco.
      */
@@ -413,5 +660,12 @@ public class WSO2AuthenticationServiceImpl extends AuthenticationServiceImpl imp
     @Override
     public void setAuthenticationEnabled(String userName, boolean enabled) throws AuthenticationException {
         this.mutableAuthenticationService.setAuthenticationEnabled(userName,enabled);
+    }
+
+    @Data
+    @AllArgsConstructor
+    private class PayLoadEncryptedJWT {
+            String payLoad;
+            EncryptedJWT encripted;
     }
 }

@@ -113,12 +113,39 @@
             <artifactId>spring-context</artifactId>
             <version>6.0.14</version>
         </dependency>
+
+        <dependency>
+            <groupId>org.alfresco.surf</groupId>
+            <artifactId>spring-surf</artifactId>
+            <version>9.0</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/libs/spring-surf-9.0.jar</systemPath>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.extensions.surf</groupId>
             <artifactId>spring-surf-core-configservice</artifactId>
             <version>9.1</version>
             <scope>system</scope>
             <systemPath>${project.basedir}/libs/spring-surf-core-configservice-9.1.jar</systemPath>
+        </dependency>
+
+        <dependency>
+            <groupId>org.alfresco.surf</groupId>
+            <artifactId>spring-surf-core</artifactId>
+            <version>9.1</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/libs/spring-surf-core-9.1.jar</systemPath>
+        </dependency>
+
+
+
+        <dependency>
+            <groupId>org.alfresco.surf</groupId>
+            <artifactId>spring-webscripts</artifactId>
+            <version>9.1</version>
+            <scope>system</scope>
+            <systemPath>${project.basedir}/libs/spring-webscripts-9.1.jar</systemPath>
         </dependency>
 
 

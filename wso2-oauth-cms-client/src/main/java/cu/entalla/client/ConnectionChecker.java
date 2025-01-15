@@ -1,16 +1,26 @@
 package cu.entalla.client;
 
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKSet;
+import com.nimbusds.jose.jwk.RSAKey;
+import cu.entalla.model.JwkKey;
 import cu.entalla.security.TrustAnyTrustManager;
+import cu.entalla.service.JwksProcessorService;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.Getter;
 
 import javax.net.ssl.*;
 import java.io.BufferedReader;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.security.cert.X509Certificate;
+import java.security.interfaces.RSAPublicKey;
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class ConnectionChecker {
 
@@ -46,6 +56,61 @@ public class ConnectionChecker {
             System.err.println("Error verificando conexión HTTPS: " + e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Obtiene la clave pública desde un recurso JWKS publicado en el servidor.
+     *
+     * @param keyId El ID de la clave (kid) que se desea obtener del JWKS.
+     * @return Clave pública como un objeto RSAPublicKey.
+     * @throws Exception Si ocurre un error al leer o procesar el JWKS.
+     */
+    public static RSAPublicKey getPublicKeyFromJWKS(String url, String keyId) throws Exception {
+        // Obtén el objeto JwksProcessorService desde la URL
+        JwksProcessorService jwksProcessorService = JwksProcessorService.fromUrl(url);
+
+        // Busca la clave pública en la lista de claves por el ID
+        JwkKey jwkKey = jwksProcessorService.getKeys().stream()
+                .filter(key -> key.getKeyId().equals(keyId))  // Filtra por el keyId
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("No se encontró una clave con el ID: " + keyId));
+
+        // Aquí se puede agregar la lógica para convertir el JwkKey a una clave pública RSA
+        if (jwkKey.getKeyType().equals("RSA")) {
+            // Asume que el JwkKey contiene información suficiente para generar la clave pública
+            // Aquí deberías agregar el código para convertir el JwkKey en una RSAPublicKey
+            return jwkKey.toRSAPublicKey();  // Método que implementes para convertir el JwkKey a RSAPublicKey
+        } else {
+            throw new IllegalArgumentException("La clave con el ID proporcionado no es una clave RSA.");
+        }
+    }
+    public static RSAPublicKey getPublicKeyFromJWKS(String url) throws Exception {
+        // Obtén el objeto JwksProcessorService desde la URL
+        JwksProcessorService jwksProcessorService = JwksProcessorService.fromUrl(url);
+
+        // Busca la clave pública en la lista de claves por el ID
+        JwkKey jwkKey = jwksProcessorService.getKeys().stream()
+                .filter(key -> key.getKeyId()!=null)  // Filtra por el keyId
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("No se encontraron claves en la url: " + url));
+
+        // Aquí se puede agregar la lógica para convertir el JwkKey a una clave pública RSA
+        if (jwkKey.getKeyType().equals("RSA")) {
+            // Asume que el JwkKey contiene información suficiente para generar la clave pública
+            // Aquí deberías agregar el código para convertir el JwkKey en una RSAPublicKey
+            return jwkKey.toRSAPublicKey();  // Método que implementes para convertir el JwkKey a RSAPublicKey
+        } else {
+            throw new IllegalArgumentException("La clave con el ID proporcionado no es una clave RSA.");
+        }
+    }
+    public static List<JwkKey> getJwkKeysFromJWKS(String url) throws Exception {
+        // Obtén el objeto JwksProcessorService desde la URL
+        JwksProcessorService jwksProcessorService = JwksProcessorService.fromUrl(url);
+
+        // Busca la clave pública en la lista de claves por el ID
+        return jwksProcessorService.getKeys().stream()
+                .filter(key -> key.getKeyId() != null).collect(Collectors.toList());
+
     }
     public static ConnectionResult getConnectionResult(String issuerUri) {
         try {

@@ -1,6 +1,15 @@
 package cu.entalla.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.nimbusds.jose.JOSEException;
+import com.nimbusds.jose.crypto.RSASSAVerifier;
+import com.nimbusds.jose.jwk.JWK;
+import com.nimbusds.jose.jwk.JWKMatcher;
+import com.nimbusds.jose.jwk.JWKSelector;
+import com.nimbusds.jose.jwk.RSAKey;
+import com.nimbusds.jose.jwk.source.RemoteJWKSet;
+import com.nimbusds.jose.util.DefaultResourceRetriever;
+import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.JWTParser;
 import com.nimbusds.jwt.SignedJWT;
 import cu.entalla.config.Wso2SecurityConfig;
@@ -14,7 +23,9 @@ import cu.entalla.model.OpenIDConfiguration;
 import cu.entalla.security.pkce.PKCEAuthorizationCodeTokenRequestEntityConverter;
 import cu.entalla.store.AuthenticationStore;
 import cu.entalla.util.AccessTokenValidator;
+import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -31,6 +42,8 @@ import org.springframework.security.oauth2.core.endpoint.OAuth2AccessTokenRespon
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationExchange;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationRequest;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponse;
+import org.springframework.security.oauth2.core.oidc.OidcIdToken;
+import org.springframework.security.oauth2.core.oidc.StandardClaimNames;
 import org.springframework.stereotype.Service;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
@@ -41,7 +54,9 @@ import javax.net.ssl.SSLParameters;
 import javax.net.ssl.TrustManager;
 import java.io.File;
 import java.io.IOException;
+import java.net.MalformedURLException;
 import java.net.URI;
+import java.net.URL;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -49,20 +64,32 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
+import java.security.interfaces.RSAPublicKey;
+import java.text.ParseException;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.StringJoiner;
 import java.util.logging.Logger;
 
 @Service
-@NoArgsConstructor
-@AllArgsConstructor
 @Data
 public class AuthenticationService {
 
     private Wso2AuthenticatorClient client;
-
+    private OidcIdToken oidcIdToken;
     private static final Logger logger = Logger.getLogger(AuthenticationService.class.getName());
+
+    public AuthenticationService(Wso2AuthenticatorClient client) {
+        this.client=client;
+    }
+    public AuthenticationService(Wso2AuthenticatorClient client,OidcIdToken oidcIdToken) {
+        this.client=client;
+        this.oidcIdToken=oidcIdToken;
+    }
+    public AuthenticationService() {
+
+    }
     public OpenIDConfiguration discoverOidcEndPoints(String propertyFilePath) throws Exception {
         if(!new File(propertyFilePath).exists())
             throw new EnTallaFileNotExistException("La url especificada para iniciar las configuraciones no existe:"+propertyFilePath);
@@ -165,12 +192,49 @@ public class AuthenticationService {
         authorizationCode= getClient().getAuthorizationCode(Id);
         return authorizationCode;
     }
-    public String decodeToken(String accessToken) {
+
+    public Map<String, Object> createOidcClaims(JWTClaimsSet claims) throws ParseException {
+        // Crear un mapa con los claims para el OidcIdToken
+        Map<String, Object> oidcClaims = new HashMap<>();
+
+        // Agregar todos los claims presentes en el JWT
+        claims.getClaims().forEach(oidcClaims::put);
+
+        // Opcional: asegurarte de agregar algunos claims estándar con nombres correctos
+        oidcClaims.putIfAbsent(StandardClaimNames.SUB, claims.getSubject());
+        oidcClaims.putIfAbsent(StandardClaimNames.EMAIL, claims.getStringClaim("email"));
+        oidcClaims.putIfAbsent(StandardClaimNames.PHONE_NUMBER, claims.getStringClaim("phone_number"));
+        oidcClaims.putIfAbsent(StandardClaimNames.PREFERRED_USERNAME, claims.getStringClaim("preferred_username"));
+        oidcClaims.putIfAbsent("username", claims.getStringClaim("username"));
+
+        return oidcClaims;
+    }
+    public String decodeToken(String idToken) {
         String payLoad=null;
         try
         {
-            SignedJWT signedJWT = (SignedJWT) JWTParser.parse(accessToken);
+            SignedJWT signedJWT = (SignedJWT) JWTParser.parse(idToken);
             payLoad=signedJWT.getPayload().toString();
+            // Obtener los claims del JWT
+            var claims = signedJWT.getJWTClaimsSet();
+
+            // Extraer las fechas de emisión y expiración
+            var issuedAt = claims.getIssueTime().toInstant();
+            var expiresAt = claims.getExpirationTime().toInstant();
+
+            // Crear un mapa con los claims para el OidcIdToken
+            Map<String, Object> oidcClaims = createOidcClaims(claims);
+            oidcClaims.put(StandardClaimNames.SUB, claims.getSubject());
+            oidcClaims.put(StandardClaimNames.EMAIL, claims.getStringClaim("email"));
+            oidcClaims.put(StandardClaimNames.NAME, claims.getStringClaim("name"));
+            oidcClaims.put(StandardClaimNames.SUB, claims.getStringClaim("sub"));
+            oidcClaims.put("username", claims.getStringClaim("username"));
+            oidcClaims.put(StandardClaimNames.PREFERRED_USERNAME, claims.getStringClaim("preferred_username"));
+            oidcClaims.put(StandardClaimNames.PHONE_NUMBER, claims.getStringClaim("phone_number"));
+            //oidcClaims.put(StandardClaimNames.ROLES, claims.getClaim("roles")); // Asegúrate de que el campo exista en el accessToken
+
+            // Devolver una instancia de OidcIdToken
+            oidcIdToken= new OidcIdToken(idToken, issuedAt, expiresAt, oidcClaims);
             logger.info("Decoded JWT Payload: " + payLoad);
             return payLoad;
         } catch (Exception e) {
@@ -187,11 +251,31 @@ public class AuthenticationService {
         restTemplate.getMessageConverters().add(new MappingJackson2XmlHttpMessageConverter());
         return restTemplate;
     }
-
-
+    public boolean isAuthenticated(String userName,String accessToken) {
+        // Verificar si el usuario ya está autenticado
+        return userName != null && AccessTokenValidator.isValidAccessToken(accessToken);
+    }
+    public boolean isAuthenticated(String userName) {
+        // Verificar si el usuario ya está autenticado
+        return userName != null;
+    }
     public boolean isAuthenticated(HttpServletRequest request) {
         // Verificar si el usuario ya está autenticado
-        String user = (String) request.getSession().getAttribute("authenticatedUser");
+        Wso2SecurityConfig alfConfig=AuthenticationStore.getInstance().getWso2SecurityConfig();
+        String user = (String) request.getSession().getAttribute(alfConfig.getAuthenticatedUserKeyWord());
+        return user != null;
+    }
+    public boolean isAuthenticated(HttpSession session) {
+        // Verificar si el usuario ya está autenticado
+        Wso2SecurityConfig alfConfig=AuthenticationStore.getInstance().getWso2SecurityConfig();
+        String user = (String) session.getAttribute(alfConfig.getAuthenticatedUserKeyWord());
+        return user != null;
+    }
+    public boolean isAuthenticated(Cookie cookie) {
+        // Verificar si el usuario ya está autenticado
+        if(cookie==null) return false;
+        Wso2SecurityConfig alfConfig=AuthenticationStore.getInstance().getWso2SecurityConfig();
+        String user = (String) (cookie.getName().equals(alfConfig.getAuthenticatedUserKeyWord())?cookie.getValue():null);
         return user != null;
     }
 
@@ -202,12 +286,71 @@ public class AuthenticationService {
         }
         return getClient().getAccessToken(code,codeVerifier);
     }
+    public String getCustomAccessToken(HttpServletRequest request, String code, String codeVerifier) throws Exception {
+        logger.info("getAccessToken using PKCE...");
+        if(!AuthenticationStore.getInstance().hasClientRegistrationRepository()){
+            throw new Exception("No existe una instancia válida de ClientRegistrationRepository.");
+        }
+        return getClient().getAccessToken(request,code,codeVerifier);
+    }
+    public String getCustomAccessToken(HttpServletRequest request, String code) throws Exception {
+        logger.info("getAccessToken using PKCE...");
+        if(!AuthenticationStore.getInstance().hasClientRegistrationRepository()){
+            throw new Exception("No existe una instancia válida de ClientRegistrationRepository.");
+        }
+        return getClient().getAccessToken(request,code);
+    }
     public String getCustomAccessToken(String code) throws Exception {
         logger.info("getAccessToken not using PKCE...");
         if(!AuthenticationStore.getInstance().hasClientRegistrationRepository()){
             throw new Exception("No existe una instancia válida de ClientRegistrationRepository.");
         }
-        return getClient().getAccessToken(code);
+        return getClient().getAccessToken(getClient().getServletRequest(), code);
+    }
+
+    public OidcIdToken createOidcToken(ClientRegistration clientRegistration, String accessToken) throws ParseException, JOSEException, MalformedURLException {
+        // Parsear el accessToken como un SignedJWT
+        SignedJWT signedJWT = SignedJWT.parse(accessToken);
+        Wso2SecurityConfig alfConfig=AuthenticationStore.getInstance().getWso2SecurityConfig();
+        // Obtener la clave pública desde el JWKS endpoint
+        RemoteJWKSet<?> jwkSet = new RemoteJWKSet<>(new URL(alfConfig.getJwkSetUri()));
+
+        // Crear un JWKMatcher para encontrar la clave por KeyID
+        String keyID = signedJWT.getHeader().getKeyID();
+        JWKMatcher matcher = new JWKMatcher.Builder().keyID(keyID).build();
+        JWKSelector selector = new JWKSelector(matcher);
+
+        JWK matchingJWK = jwkSet.get(selector, null).get(0);
+
+        RSAKey rsaKey = (RSAKey) matchingJWK;
+        RSAPublicKey publicKey = rsaKey.toRSAPublicKey();
+
+        // Verificar la firma del JWT
+        RSASSAVerifier verifier = new RSASSAVerifier(publicKey);
+        if (!signedJWT.verify(verifier)) {
+            throw new SecurityException("La firma del accessToken no es válida.");
+        }
+
+        // Obtener los claims del JWT
+        var claims = signedJWT.getJWTClaimsSet();
+
+        // Extraer las fechas de emisión y expiración
+        var issuedAt = claims.getIssueTime().toInstant();
+        var expiresAt = claims.getExpirationTime().toInstant();
+
+        // Crear un mapa con los claims para el OidcIdToken
+        Map<String, Object> oidcClaims = new HashMap<>();
+        oidcClaims.put(StandardClaimNames.SUB, claims.getSubject());
+        oidcClaims.put(StandardClaimNames.EMAIL, claims.getStringClaim("email"));
+        oidcClaims.put(StandardClaimNames.NAME, claims.getStringClaim("name"));
+        oidcClaims.put(StandardClaimNames.SUB, claims.getStringClaim("sub"));
+        oidcClaims.put("username", claims.getStringClaim("username"));
+        oidcClaims.put(StandardClaimNames.PREFERRED_USERNAME, claims.getStringClaim("preferred_username"));
+        oidcClaims.put(StandardClaimNames.PHONE_NUMBER, claims.getStringClaim("phone_number"));
+        //oidcClaims.put(StandardClaimNames.ROLES, claims.getClaim("roles")); // Asegúrate de que el campo exista en el accessToken
+
+        // Devolver una instancia de OidcIdToken
+        return this.oidcIdToken= new OidcIdToken(accessToken, issuedAt, expiresAt, oidcClaims);
     }
     public OAuth2AccessTokenResponse getAccessToken(String code, String codeVerifier) throws Exception {
         logger.info("getAccessToken using PKCE...");

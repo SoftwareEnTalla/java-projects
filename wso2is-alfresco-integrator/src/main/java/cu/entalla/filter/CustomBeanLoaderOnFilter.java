@@ -8,7 +8,6 @@ import cu.entalla.security.EnTallaTrustManager;
 import cu.entalla.service.AuthenticationService;
 import cu.entalla.store.CookieManager;
 import jakarta.servlet.*;
-import jakarta.servlet.annotation.WebFilter;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.ApplicationContext;
@@ -17,7 +16,7 @@ import org.springframework.web.context.support.WebApplicationContextUtils;
 import java.io.IOException;
 import java.util.logging.Logger;
 
-@WebFilter(urlPatterns = {"/alfresco/*", "/share/*"})
+//@WebFilter(urlPatterns = {"/alfresco/*", "/share/*"})
 public class CustomBeanLoaderOnFilter implements Filter {
 
     private Wso2SecurityConfig wso2SecConfig;
@@ -37,7 +36,7 @@ public class CustomBeanLoaderOnFilter implements Filter {
             if(redirectPage==null||redirectPage!=null && !redirectPage.isEmpty())
                 redirectPage="/alfresco";
             ApplicationContext webApplicationContext= WebApplicationContextUtils.getWebApplicationContext(filterConfig.getServletContext());
-            SpringContextHolder.registry(redirectPage,webApplicationContext);
+            //SpringContextHolder.registry(redirectPage,webApplicationContext);
             SpringContextHolder.setApplicationContext(redirectPage,webApplicationContext);
             logger.info("...................Guardando contexto ["+redirectPage+"] spring-hazelcast con Servlet CustomBeanLoaderOnFilter............");
             // Obtener el valor de CATALINA_BASE
@@ -62,6 +61,7 @@ public class CustomBeanLoaderOnFilter implements Filter {
             }
 
         } catch (Exception e) {
+            logger.severe("ERROR Inicializando CustomBeanLoaderOnFilter"+e.getMessage());
             e.printStackTrace();
         }
     }

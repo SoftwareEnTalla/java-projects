@@ -54,20 +54,10 @@ public class HazelCastConfig {
     }
     private HazelCastConfig() {
         loaded=false;
-        HazelCastConfig.create();
     }
     public static Logger getLogger(){
         return  Logger.getLogger(HazelCastConfig.class.getName());
     }
-    private static HazelCastConfig create(){
-
-        if(HazelCastConfig.getInstance()!=null) {
-            return hazelCastConfig.isLoaded()?hazelCastConfig:hazelCastConfig.loadProperties();
-        }
-
-        return hazelCastConfig;
-    }
-   
 
     @Bean
     public HazelcastInstance hazelcastClassPathInstance(){
@@ -75,7 +65,7 @@ public class HazelCastConfig {
         getLogger().info("Hazelcast Config created... ");
         HazelCastConfig conf=HazelCastConfig.getInstance();
         if(conf==null) {
-            conf = HazelCastConfig.create();
+            conf = HazelCastConfig.getInstance();
             if (!conf.isLoaded())
                 conf.loadProperties();
             //AuthenticationStore.getInstance().setWso2SecurityConfig(conf);
@@ -178,7 +168,7 @@ public class HazelCastConfig {
     public static HazelCastConfig getInstance() {
         if(hazelCastConfig==null)
             hazelCastConfig=new HazelCastConfig();
-        return hazelCastConfig;
+        return hazelCastConfig.isLoaded()?hazelCastConfig:hazelCastConfig.loadProperties();
     }
 
 

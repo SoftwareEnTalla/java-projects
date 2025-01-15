@@ -1,6 +1,8 @@
 package cu.entalla.security;
 
 
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import jakarta.servlet.ServletException;
 import org.springframework.security.oauth2.core.endpoint.OAuth2AuthorizationResponse;
 import org.springframework.security.web.util.ThrowableAnalyzer;
@@ -8,6 +10,8 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.util.StringUtils;
 
+import java.text.ParseException;
+import java.util.HashMap;
 import java.util.Map;
 
 public class SecurityUtils {
@@ -66,6 +70,57 @@ public class SecurityUtils {
                 ThrowableAnalyzer.verifyThrowableHierarchy(throwable, ServletException.class);
                 return ((ServletException)throwable).getRootCause();
             });
+        }
+    }
+
+    public Map<String, Object> extractAdditionalPropertiesFromToken(String accessToken) throws AuthenticationException {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            // Extraer propiedades adicionales según tus necesidades
+            Map<String, Object> additionalProperties = new HashMap<>();
+            additionalProperties.put("firstName", claims.getStringClaim("given_name"));
+            additionalProperties.put("lastName", claims.getStringClaim("family_name"));
+
+            return additionalProperties;
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token for additional properties", e);
+        }
+    }
+    public String getUsernameFromToken(String accessToken) throws AuthenticationException {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("username");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token", e);
+        }
+    }
+    public String getExpireInFromToken(String accessToken) throws AuthenticationException {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getDateClaim("exp").toString();
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token", e);
+        }
+    }
+    public String getPhoneFromToken(String accessToken) throws AuthenticationException {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("phone");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token for phone", e);
+        }
+    }
+    public String getEmailFromToken(String accessToken) throws AuthenticationException {
+        try {
+            SignedJWT signedJWT = SignedJWT.parse(accessToken);
+            JWTClaimsSet claims = signedJWT.getJWTClaimsSet();
+            return claims.getStringClaim("email");
+        } catch (ParseException e) {
+            throw new AuthenticationException("Error parsing access token for email", e);
         }
     }
 }

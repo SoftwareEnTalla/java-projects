@@ -4,13 +4,16 @@ import com.hazelcast.config.ClasspathXmlConfig;
 import com.hazelcast.config.Config;
 import com.hazelcast.core.Hazelcast;
 import com.hazelcast.core.HazelcastInstance;
+import com.hazelcast.core.LifecycleEvent;
 import cu.entalla.app.context.SpringContextHolder;
 import cu.entalla.config.CustomAuthorizationRequestResolver;
 import cu.entalla.config.Wso2Config;
+import cu.entalla.config.Wso2SecurityConfig;
 import cu.entalla.controller.SlingshotLoginController;
 import cu.entalla.security.SecurityUtils;
 import cu.entalla.service.ServiceLocator;
-import cu.entalla.udi.AlfrescoIntegration;
+import cu.entalla.store.CookieManager;
+import cu.entalla.udi.ClientServiceIntegration;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -86,6 +89,7 @@ import org.springframework.web.context.request.RequestContextHolder;
 import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.context.request.ServletWebRequest;
 import org.springframework.web.context.support.WebApplicationContextUtils;
+import org.springframework.web.context.support.XmlWebApplicationContext;
 import org.springframework.web.util.UriComponents;
 import org.springframework.web.util.UriComponentsBuilder;
 
@@ -104,7 +108,7 @@ public class Wso2ShareAuthenticationFilter implements Filter {
     public static final String ALFRESCO_ENDPOINT_ID = "alfresco";
     public static final String ALFRESCO_API_ENDPOINT_ID = "alfresco-api";
     public static final String SHARE_PAGE = "/share/page";
-    public static final String SHARE_AIMS_LOGOUT = "/share/page/aims/logout";
+    public static final String SHARE_WSO2_LOGOUT = "/share/page/wso2/logout";
     public static final String DEFAULT_AUTHORIZATION_REQUEST_BASE_URI = "/oauth2/authorization";
     private ClientRegistrationRepository clientRegistrationRepository;
     private OAuth2AuthorizedClientService oauth2ClientService;
@@ -122,8 +126,10 @@ public class Wso2ShareAuthenticationFilter implements Filter {
         return authorities;
     };
     private final OAuth2UserService<OidcUserRequest, OidcUser> userService = new OidcUserService();
+
+    private final Wso2SecurityConfig wso2SecConfig=Wso2SecurityConfig.create();
     private String clientId;
-    private String redirectPage="/alfresco";
+    private String redirectPage="/share";
 
     public Wso2ShareAuthenticationFilter() {
     }
@@ -134,105 +140,168 @@ public class Wso2ShareAuthenticationFilter implements Filter {
         }
         this.context = WebApplicationContextUtils.getRequiredWebApplicationContext(filterConfig.getServletContext());
         try {
-            SpringContextHolder.registry(redirectPage,this.context);
+            Wso2Config config = (Wso2Config)this.context.getBean("wso2.config");
+            this.enabled = config.isEnabled();
+            if (this.enabled) {
+                this.clientId = config.getResource();
+                this.clientRegistrationRepository = (ClientRegistrationRepository)this.context.getBean(ClientRegistrationRepository.class);
+                this.oauth2ClientService = (OAuth2AuthorizedClientService)this.context.getBean(OAuth2AuthorizedClientService.class);
+                this.requestCache = new HttpSessionRequestCache();
+                this.authorizationRequestResolver = new CustomAuthorizationRequestResolver(this.clientRegistrationRepository, DEFAULT_AUTHORIZATION_REQUEST_BASE_URI);
+                this.authorizationRequestRepository = new HttpSessionOAuth2AuthorizationRequestRepository();
+                this.throwableAnalyzer = new SecurityUtils.DefaultThrowableAnalyzer();
+            }
+            this.connectorService = (ConnectorService)this.context.getBean("connector.service");
+            this.loginController = (SlingshotLoginController)this.context.getBean("loginController");
+            if (logger.isInfoEnabled()) {
+                logger.info("Wso2 filter initialized.");
+            }
+            //SpringContextHolder.registry(redirectPage,this.context);
             SpringContextHolder.setApplicationContext(redirectPage,this.context);
         } catch (Exception e) {
+            logger.error("ERROR Iniciando Wso2ShareAuthenticationFilter::::::::::::::::::::::::::::::::::::::::\n"+e.getMessage());
             throw new RuntimeException(e);
-        }
-
-        Wso2Config config = (Wso2Config)this.context.getBean("wso2.config");
-        this.enabled = config.isEnabled();
-        if (this.enabled) {
-            this.clientId = config.getResource();
-            this.clientRegistrationRepository = (ClientRegistrationRepository)this.context.getBean(ClientRegistrationRepository.class);
-            this.oauth2ClientService = (OAuth2AuthorizedClientService)this.context.getBean(OAuth2AuthorizedClientService.class);
-            this.requestCache = new HttpSessionRequestCache();
-            this.authorizationRequestResolver = new CustomAuthorizationRequestResolver(this.clientRegistrationRepository, "/oauth2/authorization");
-            this.authorizationRequestRepository = new HttpSessionOAuth2AuthorizationRequestRepository();
-            this.throwableAnalyzer = new SecurityUtils.DefaultThrowableAnalyzer();
-        }
-        this.connectorService = (ConnectorService)this.context.getBean("connector.service");
-        this.loginController = (SlingshotLoginController)this.context.getBean("loginController");
-        if (logger.isInfoEnabled()) {
-            logger.info("Wso2 filter initialized.");
         }
 
     }
 
+    private void inicialized(HttpServletRequest request, HttpServletResponse response,HttpSession session)  {
+
+        try{
+            CookieManager manager= cu.entalla.store.CookieManager.getInstance().setRequest(request).setResponse(response);
+            logger.info("Ejecutando ClientServiceIntegration");
+            ApplicationContext shareContext = SpringContextHolder.getApplicationContext(redirectPage);
+            shareContext= (XmlWebApplicationContext) shareContext;
+            ConnectorService connectorService = (ConnectorService) shareContext.getBean("connector.service");
+            if(connectorService!=null){
+                logger.info("connectorService no es null:::::::");
+                connectorService.setApplicationContext(shareContext);
+                if(connectorService.getConfigService()==null){
+                    logger.info("getConfigService es null:::::::");
+                    Map<String, ConfigService> beansOfType = shareContext.getBeansOfType(ConfigService.class);
+                    logger.info("getBeansOfType ConfigService= "+beansOfType.size());
+                    String catalinaBase = System.getenv("CATALINA_BASE");
+                    ConfigService configService = SpringContextHolder.loadShareConfiguration(shareContext,catalinaBase+"/shared/classes/alfresco/web-extension/share-config-custom.xml");// beansOfType.get("web.config");
+                    connectorService.setConfigService(configService);
+                }
+                else {
+                    logger.info("getConfigService  no es null:::::::");
+                }
+            }
+            else {
+                logger.info("connectorService es null:::::::");
+            }
+            logger.info("ConnectorService loaded from beans=>connector.service");
+            ClientServiceIntegration integration = ServiceLocator.getIntegrator()
+                    .setConnectorService(connectorService);
+            // .initRequestContext(request, response,session);
+            request=integration.getRequest();
+            response=integration.getResponse();
+            session=integration.getSession();
+            ServiceLocator.registerIntegrator(integration);
+            logger.info("Request,Response and Session loaded from ClientServiceIntegration");
+            String username=manager.hasAttribute("X-Alfresco-Remote-User")? manager.getAttribute("X-Alfresco-Remote-User").toString():null;
+            String accessToken=manager.hasAttribute("X-Access-Token")? manager.getAttribute("X-Access-Token").toString():null;
+
+            String ticketMode = wso2SecConfig.getPropertyByKey("oauth2.client.provider.wso2.ticket-mode","standar");
+            logger.info("ticketMode="+ticketMode);
+            logger.info("ticketMode='custom'"+(ticketMode=="custom"));
+            logger.info("ticketMode='custom'"+"custom".equals(ticketMode));
+            String alfTicket ="custom".equals(ticketMode)?integration.getTicket(accessToken): integration.getTicket(session.getId(), username, accessToken);
+            if (alfTicket != null) {
+                integration.configureSession(session, username, alfTicket);
+            } else {
+                logger.error("Could not get an alfTicket from Repository.");
+            }
+        }catch (Exception e){
+            logger.error("ERROR on method: inicialized Wso2ShareAuthenticationFilter::::::::::::::::::::::::::::::::::::::::\n"+e.getMessage());
+        }
+    }
     public void doFilter(ServletRequest sreq, ServletResponse sres, FilterChain chain) throws IOException, ServletException {
         HttpServletRequest request = (HttpServletRequest)sreq;
         HttpServletResponse response = (HttpServletResponse)sres;
         HttpSession session = request.getSession();
-        boolean isAuthenticated = false;
-        if (null != session && this.enabled) {
-            SecurityContext attribute = (SecurityContext)session.getAttribute("SPRING_SECURITY_CONTEXT");
-            if (null != attribute) {
-                isAuthenticated = attribute.getAuthentication().isAuthenticated();
-                if (isAuthenticated) {
-                    try {
-                        this.refreshToken(attribute, session);
-                    } catch (Exception var16) {
-                        logger.error("Resulted in Error while doing refresh token " + var16.getMessage());
-                        session.invalidate();
-                        if (!request.getRequestURI().contains("/share/page/aims/logout")) {
-                            isAuthenticated = false;
+        try{
+            inicialized(request,response,session);
+            boolean isAuthenticated = false;
+            if (null != session && this.enabled) {
+                SecurityContext attribute = (SecurityContext)session.getAttribute("SPRING_SECURITY_CONTEXT");
+                logger.info("SPRING_SECURITY_CONTEXT Distinto de null="+(attribute!=null));
+                if (null != attribute) {
+                    isAuthenticated = attribute.getAuthentication().isAuthenticated();
+                    logger.info("SPRING_SECURITY_CONTEXT isAuthenticated="+isAuthenticated);
+                    if (isAuthenticated) {
+                        try {
+                            this.refreshToken(attribute, session);
+                            logger.info("::::::::::::::::::Token refreshed:::::::::::::::::");
+                        } catch (Exception var16) {
+                            logger.error("Resulted in Error while doing refresh token " + var16.getMessage());
+                            session.invalidate();
+                            if (!request.getRequestURI().contains(SHARE_WSO2_LOGOUT)) {
+                                isAuthenticated = false;
+                            }
                         }
                     }
                 }
             }
-        }
 
-        if (!isAuthenticated && this.enabled) {
-            if (this.matchesAuthorizationResponse(request)) {
-                this.processAuthorizationResponse(request, response, session);
-            } else {
-                try {
-                    this.requestCache.saveRequest(request, response);
-                    OAuth2AuthorizationRequest authorizationRequest = this.authorizationRequestResolver.resolve(request, this.clientId);
-                    if (authorizationRequest != null) {
-                        this.sendRedirectForAuthorization(request, response, authorizationRequest);
+            if (!isAuthenticated && this.enabled) {
+                if (this.matchesAuthorizationResponse(request)) {
+                    this.processAuthorizationResponse(request, response, session);
+                } else {
+                    try {
+                        this.requestCache.saveRequest(request, response);
+                        OAuth2AuthorizationRequest authorizationRequest = this.authorizationRequestResolver.resolve(request, this.clientId);
+                        if (authorizationRequest != null) {
+                            this.sendRedirectForAuthorization(request, response, authorizationRequest);
+                            return;
+                        }
+                    } catch (Exception var15) {
+                        this.unsuccessfulRedirectForAuthorization(response);
                         return;
                     }
-                } catch (Exception var15) {
-                    this.unsuccessfulRedirectForAuthorization(response);
-                    return;
-                }
-
-                try {
-                    chain.doFilter(request, response);
-                } catch (IOException var13) {
-                    throw var13;
-                } catch (Exception var14) {
-                    Throwable[] causeChain = this.throwableAnalyzer.determineCauseChain(var14);
-                    ClientAuthorizationRequiredException authzEx = (ClientAuthorizationRequiredException)this.throwableAnalyzer.getFirstThrowableOfType(ClientAuthorizationRequiredException.class, causeChain);
-                    if (authzEx == null) {
-                        if (var14 instanceof ServletException) {
-                            throw (ServletException)var14;
-                        }
-
-                        if (var14 instanceof RuntimeException) {
-                            throw (RuntimeException)var14;
-                        }
-
-                        throw new RuntimeException(var14);
-                    }
 
                     try {
-                        OAuth2AuthorizationRequest authorizationRequest = this.authorizationRequestResolver.resolve(request, authzEx.getClientRegistrationId());
-                        if (authorizationRequest == null) {
-                            throw authzEx;
+                        chain.doFilter(request, response);
+                    } catch (IOException var13) {
+                        throw var13;
+                    } catch (Exception var14) {
+                        Throwable[] causeChain = this.throwableAnalyzer.determineCauseChain(var14);
+                        ClientAuthorizationRequiredException authzEx = (ClientAuthorizationRequiredException)this.throwableAnalyzer.getFirstThrowableOfType(ClientAuthorizationRequiredException.class, causeChain);
+                        if (authzEx == null) {
+                            if (var14 instanceof ServletException) {
+                                throw (ServletException)var14;
+                            }
+
+                            if (var14 instanceof RuntimeException) {
+                                throw (RuntimeException)var14;
+                            }
+
+                            throw new RuntimeException(var14);
                         }
 
-                        this.sendRedirectForAuthorization(request, response, authorizationRequest);
-                        this.requestCache.saveRequest(request, response);
-                    } catch (Exception var12) {
-                        this.unsuccessfulRedirectForAuthorization(response);
+                        try {
+                            OAuth2AuthorizationRequest authorizationRequest = this.authorizationRequestResolver.resolve(request, authzEx.getClientRegistrationId());
+                            if (authorizationRequest == null) {
+                                throw authzEx;
+                            }
+
+                            this.sendRedirectForAuthorization(request, response, authorizationRequest);
+                            this.requestCache.saveRequest(request, response);
+                        } catch (Exception var12) {
+                            this.unsuccessfulRedirectForAuthorization(response);
+                        }
                     }
                 }
+            } else {
+                chain.doFilter(sreq, sres);
             }
-        } else {
-            chain.doFilter(sreq, sres);
         }
+        catch (Exception e){
+            logger.error("ERROR on method: doFilter of Wso2ShareAuthenticationFilter::::::::::::::::::::::::::::::::::::::::\n"+e.getMessage());
+            response.sendRedirect("/page?error_on_filter=Wso2ShareAuthenticationFilter.doFilter");
+        }
+        chain.doFilter(sreq, sres);
 
     }
 
@@ -270,7 +339,7 @@ public class Wso2ShareAuthenticationFilter implements Filter {
         }
     }
 
-    private AlfrescoIntegration initRequestContext(HttpServletRequest request, HttpServletResponse response,HttpSession session) throws RequestContextException {
+    private ClientServiceIntegration initRequestContext(HttpServletRequest request, HttpServletResponse response,HttpSession session) throws RequestContextException {
         RequestContext context = ThreadLocalRequestContext.getRequestContext();
         ApplicationContext shareContext=SpringContextHolder.getApplicationContext("/share");
         if (context == null && shareContext!=null) {
@@ -283,13 +352,32 @@ public class Wso2ShareAuthenticationFilter implements Filter {
 
             logger.info("ClusterAwarePathStoreObjectPersister created... ");
             ClusterAwarePathStoreObjectPersister persister=new ClusterAwarePathStoreObjectPersister();
-            String instanceName="softwarentalla-hazelcast-instance";
-            persister.setHazelcastTopicName(instanceName);
-            // Nombre del archivo en la ruta del classpath
-            String configFileName = "alfresco/extension/hazelcastConfig.xml";
-            // Cargar configuración desde el classpath
-            Config config = new ClasspathXmlConfig(configFileName);
-            config.setInstanceName(instanceName);
+
+            boolean loadHazelCast=wso2SecConfig.getPropertyByKey("hazelcast.instance.enabled","")=="true";
+            if(loadHazelCast) {
+                logger.info("Hazelcast config created... ");
+                String instanceName = "softwarentalla-hazelcast-instance";
+                persister.setHazelcastTopicName(instanceName);
+                // Nombre del archivo en la ruta del classpath
+                String configFileName = "alfresco/extension/hazelcastConfig.xml";
+                // Cargar configuración desde el classpath
+                Config config = new ClasspathXmlConfig(configFileName);
+                config.setInstanceName(instanceName);
+                // Crear instancia de Hazelcast con la configuración cargada
+                HazelcastInstance hazelcastInstance = Hazelcast.getOrCreateHazelcastInstance(config);
+                hazelcastInstance.getLifecycleService().addLifecycleListener(event -> {
+                    if (event.getState() == LifecycleEvent.LifecycleState.SHUTTING_DOWN) {
+                        hazelcastInstance.shutdown();
+                    }
+                });
+                Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                    System.out.println("Apagando la JVM. Cerrando Hazelcast...");
+                    hazelcastInstance.shutdown();
+                }));
+                logger.info("HazelcastInstance config created... ");
+                persister.setHazelcastInstance(hazelcastInstance);
+            }
+
 
             AutowireService autowireService = new AutowireService();
             PersisterService persisterService = new PersisterService();
@@ -297,14 +385,9 @@ public class Wso2ShareAuthenticationFilter implements Filter {
             persisterService.setAutowireService(autowireService);
 
 
-            logger.info("Hazelcast config created... ");
-            // Crear instancia de Hazelcast con la configuración cargada
-            HazelcastInstance hazelcastInstance = Hazelcast.getOrCreateHazelcastInstance(config);
-            logger.info("HazelcastInstance config created... ");
-            persister.setHazelcastInstance(hazelcastInstance);
             ClusterAwareRequestContextFactory clusterAwareRequestContextFactory = new ClusterAwareRequestContextFactory();
             logger.info("ClusterAwareRequestContextFactory config created... ");
-            clusterAwareRequestContextFactory.setClusterObjectPersister(persister);
+            //clusterAwareRequestContextFactory.setClusterObjectPersister(persister);
 
             ConnectorService connectorService = new ConnectorService();
             connectorService.setApplicationContext(shareContext);
@@ -345,13 +428,13 @@ public class Wso2ShareAuthenticationFilter implements Filter {
         }
         RequestContextHolder.setRequestAttributes(new ServletRequestAttributes(request, response));
         ServletUtil.setRequest(request);
-        AlfrescoIntegration alfrescoIntegration = ServiceLocator.getAlfrescoIntegration();
-        alfrescoIntegration.setRequest(request);
-        alfrescoIntegration.setResponse(response);
-        alfrescoIntegration.setSession(session);
-        alfrescoIntegration.setApplicationContext(shareContext);
-        ServiceLocator.registerAlfrescoIntegration(alfrescoIntegration);
-        return alfrescoIntegration;
+        ClientServiceIntegration integration = ServiceLocator.getIntegrator();
+        integration.setRequest(request);
+        integration.setResponse(response);
+        integration.setSession(session);
+        integration.setApplicationContext(shareContext);
+        ServiceLocator.registerIntegrator(integration);
+        return integration;
     }
 
     private void initUser(HttpServletRequest request) throws UserFactoryException {

@@ -62,7 +62,7 @@ public class OAuth2AuthenticationFilter implements Filter {
                 redirectPage="/alfresco";
             WebApplicationContext webApplicationContext = WebApplicationContextUtils.getWebApplicationContext(filterConfig.getServletContext());
             SpringContextHolder.setApplicationContext(redirectPage,webApplicationContext);
-            SpringContextHolder.registry(redirectPage,webApplicationContext);
+            //SpringContextHolder.registry(redirectPage,webApplicationContext);
 
             // Obtener el valor de CATALINA_BASE
             String catalinaBase = System.getenv("CATALINA_BASE");
@@ -92,10 +92,12 @@ public class OAuth2AuthenticationFilter implements Filter {
                 if(trustManager!=null){
                     AuthenticationStore.getInstance().setTrustManager(trustManager);
                 }
+                wso2SecConfig.getIntegrator();
                 AuthenticationStore.getInstance().setWso2SecurityConfig(this.wso2SecConfig);
             }
 
         } catch (Exception e) {
+            logger.info(":::::::::::::::::::::ERROR ejecutando OAuth2AuthenticationFilter:init on "+filterConfig.getInitParameter("redirectPage")+" :::::::::::\n"+e.getMessage());
             e.printStackTrace();
         }
     }

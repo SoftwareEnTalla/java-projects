@@ -121,9 +121,42 @@
       <groupId>jakarta.servlet</groupId>
       <artifactId>jakarta.servlet-api</artifactId>
       <version>6.0.0</version>
-      <scope>provided</scope>
+      <scope>system</scope>
       <systemPath>${project.basedir}/libs/servlet-api.jar</systemPath>
     </dependency>
+
+    <dependency>
+      <groupId>org.alfresco</groupId>
+      <artifactId>alfresco-share-encryption</artifactId>
+      <version>23.2.0.72</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/alfresco-share-encryption-23.2.0.72.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.alfresco.cmis.client</groupId>
+      <artifactId>alfresco-opencmis-extension</artifactId>
+      <version>2.3</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/spring-cmis-framework-9.0.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.alfresco.surf</groupId>
+      <artifactId>spring-cmis-framework</artifactId>
+      <version>9.0</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/alfresco-opencmis-extension-2.3.jar</systemPath>
+    </dependency>
+
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-security-oauth2-client</artifactId>
+      <version>6.1.7</version>
+      <scope>system</scope>
+      <systemPath>${project.basedir}/libs/spring-security-oauth2-client-6.1.7.jar</systemPath>
+    </dependency>
+
 
     <!--dependency>
       <groupId>org.springframework.extensions.surf</groupId>

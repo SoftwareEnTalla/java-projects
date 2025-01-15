@@ -10,6 +10,9 @@ import cu.entalla.security.TrustAnyTrustManager;
 import cu.entalla.security.TrustSpecificHostsManager;
 import cu.entalla.service.AuthenticationService;
 import cu.entalla.store.AuthenticationStore;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import lombok.Getter;
 import org.json.JSONObject;
 import org.springframework.security.oauth2.client.registration.ClientRegistration;
@@ -48,6 +51,9 @@ public class Wso2AuthenticatorClient {
     private HostnameVerifier hostnameVerifier;
     private static EnTallaTrustManager trustManager=null;
 
+    HttpServletResponse servletResponse;
+    HttpServletRequest servletRequest;
+
     // CompletableFuture para esperar el resultado del callback
     private static final CompletableFuture<AuthorizationResponseModel> callbackResponse = new CompletableFuture<>();
 
@@ -81,13 +87,26 @@ public class Wso2AuthenticatorClient {
         }
         return _instance;
     }
+
+    public Wso2AuthenticatorClient setServletResponse(HttpServletResponse servletResponse){
+        this.servletResponse=servletResponse;
+        return this;
+    }
+    public Wso2AuthenticatorClient setServletRequest(HttpServletRequest servletRequest){
+        this.servletRequest=servletRequest;
+        return this;
+    }
     public String getAuthorizationCode(){
         String response=null;
         try {
             AuthorizationRequestModel requestModel=new AuthorizationRequestModel();
             String url=requestModel.buildAuthorizeUrl();
             logger.info("Sending url for getAuthorizationCode:"+url);
-            response=handleAuthorizationCodeRequest(url);
+            if(servletResponse!=null)
+                response=handleAuthorizationCodeRequest(url,servletResponse);
+            else if(servletRequest!=null && servletResponse!=null)
+                response=handleAuthorizationCodeRequest(url,servletRequest,servletResponse);
+            else response=handleAuthorizationCodeRequest(url);
 
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -96,6 +115,8 @@ public class Wso2AuthenticatorClient {
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
         } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (ServletException e) {
             throw new RuntimeException(e);
         }
         return response;
@@ -106,7 +127,11 @@ public class Wso2AuthenticatorClient {
             AuthorizationRequestModel requestModel=new AuthorizationRequestModel();
             String url=requestModel.buildAuthorizeUrl(Id);
             logger.info("Sending url for getAuthorizationCode:"+url);
-            response=handleAuthorizationCodeRequest(url);
+            if(servletResponse!=null)
+                response=handleAuthorizationCodeRequest(url,servletResponse);
+            else if(servletRequest!=null && servletResponse!=null)
+                response=handleAuthorizationCodeRequest(url,servletRequest,servletResponse);
+            else response=handleAuthorizationCodeRequest(url);
 
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -115,6 +140,8 @@ public class Wso2AuthenticatorClient {
         } catch (URISyntaxException e) {
             throw new RuntimeException(e);
         } catch (ExecutionException e) {
+            throw new RuntimeException(e);
+        } catch (ServletException e) {
             throw new RuntimeException(e);
         }
         return response;
@@ -134,9 +161,40 @@ public class Wso2AuthenticatorClient {
         logger.info("Datos adicionales recibidos: " + model.toJson());
         return model.getCode();
     }
+    public String handleAuthorizationCodeRequest(String authorizationUri, HttpServletResponse response) throws URISyntaxException, IOException, ExecutionException, InterruptedException {
+        // Pasar la URL de autorización al JSP
+        if(servletRequest!=null)
+            servletRequest.setAttribute("authorizationUri", authorizationUri);
+        // Abrir el navegador
+        response.sendRedirect(authorizationUri); // Redirige al usuario en la misma pestaña
+        // Esperar a que el callback complete la operación
+        logger.info("Esperando el código de autorización desde el callback...");
+        AuthorizationResponseModel model = callbackResponse.get(); // Bloquea hasta que se complete
+        logger.info("Código de autorización recibido: " + model.getCode());
+        logger.info("Datos adicionales recibidos: " + model.toJson());
+        return model.getCode();
+    }
+
+    public String handleAuthorizationCodeRequest(String authorizationUri, HttpServletRequest request, HttpServletResponse response) throws ServletException, IOException, ExecutionException, InterruptedException {
+        // Pasar la URL de autorización al JSP
+        request.setAttribute("authorizationUri", authorizationUri);
+
+        Object redirectPage = request.getAttribute("X-Redirect");
+        // Redirigir al JSP que contiene el script de redirección
+        request.getRequestDispatcher((redirectPage!=null?redirectPage:"/alfresco")+"/redirect.jsp").forward(request, response);
+
+        // Esperar a que el callback complete la operación
+        logger.info("Esperando el código de autorización desde el callback...");
+        AuthorizationResponseModel model = callbackResponse.get(); // Bloquea hasta que se complete
+        logger.info("Código de autorización recibido: " + model.getCode());
+        logger.info("Datos adicionales recibidos: " + model.toJson());
+        return model.getCode();
+    }
 
     // Método para completar la operación desde el servlet
     public AuthorizationResponseModel completeCallback(String code, String session_state) {
+        Wso2SecurityConfig wso2SecurityConfig = Wso2SecurityConfig.create();
+        wso2SecurityConfig.setSessionState(session_state);
         AuthorizationResponseModel model = AuthorizationResponseModel.builder().code(code).sessionState(session_state).build();
         logger.info("AuthorizationResponseModel builded with code="+code+" and sessionState="+session_state);
         boolean completed= callbackResponse.complete(model);
@@ -315,6 +373,115 @@ public class Wso2AuthenticatorClient {
         return accessToken;
     }
 
+    public String getAccessToken(HttpServletRequest httpRequest,String code, String codeVerifier) throws Exception {
+        logger.info("getAccessToken using PKCE...");
+
+        if (!AuthenticationStore.getInstance().hasClientRegistrationRepository()) {
+            throw new Exception("No existe una instancia válida de ClientRegistrationRepository.");
+        }
+
+        // Obtén el registro del cliente
+        ClientRegistration clientRegistration = AuthenticationStore.getInstance().getClientRegistrationRepository().findByRegistrationId("wso2");
+        logger.info("clientRegistration: " + clientRegistration);
+
+        // Construye el cuerpo de la solicitud
+        String tokenUri = clientRegistration.getProviderDetails().getTokenUri();
+        String body = String.format(
+                "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&code_verifier=%s",
+                URLEncoder.encode(code, StandardCharsets.UTF_8),
+                URLEncoder.encode(clientRegistration.getRedirectUri(), StandardCharsets.UTF_8),
+                URLEncoder.encode(clientRegistration.getClientId(), StandardCharsets.UTF_8),
+                URLEncoder.encode(codeVerifier, StandardCharsets.UTF_8)
+        );
+
+        // Crea la solicitud POST
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(tokenUri))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        // Envía la solicitud
+        HttpResponse<String> response = getHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+        String responseText=response.body();
+        logger.info("Response: " + responseText);
+
+        // Maneja la respuesta
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Error al obtener el token: " + responseText);
+        }
+
+        // Extrae el access_token
+        JSONObject jsonResponse = new JSONObject(responseText);
+        if (!jsonResponse.has("access_token")) {
+            throw new RuntimeException("El servidor no devolvió un access_token.");
+        }
+        AuthenticationStore.getInstance().setTokenModel(TokenResponseModel.fromJson(jsonResponse));
+        String accessToken = jsonResponse.getString("access_token");
+        String refreshToken = jsonResponse.getString("refresh_token");
+        String idToken=jsonResponse.getString("id_token");
+        Wso2SecurityConfig wso2SecurityConfig = Wso2SecurityConfig.create();
+        String key=wso2SecurityConfig.getPropertyByKey("external.authentication.proxyTokenHeader","X-Access-Tocken");
+        httpRequest.getSession().setAttribute(key,accessToken);
+        httpRequest.getSession().setAttribute("refresh_token",refreshToken);
+        httpRequest.getSession().setAttribute("id_token",idToken);
+        logger.info("AccessToken: " + accessToken);
+        return accessToken;
+    }
+
+    public String getAccessToken(HttpServletRequest httpRequest,String code) throws Exception {
+        logger.info("getAccessToken...");
+        if (!AuthenticationStore.getInstance().hasClientRegistrationRepository()) {
+            throw new Exception("No existe una instancia válida de ClientRegistrationRepository.");
+        }
+
+        // Obtén el registro del cliente
+        ClientRegistration clientRegistration = AuthenticationStore.getInstance().getClientRegistrationRepository().findByRegistrationId("wso2");
+        logger.info("clientRegistration: " + clientRegistration);
+
+        // Construye el cuerpo de la solicitud
+        String tokenUri = clientRegistration.getProviderDetails().getTokenUri();
+        String body = String.format(
+                "grant_type=authorization_code&code=%s&redirect_uri=%s&client_id=%s&client_secret=%s",
+                URLEncoder.encode(code, StandardCharsets.UTF_8),
+                URLEncoder.encode(clientRegistration.getRedirectUri(), StandardCharsets.UTF_8),
+                URLEncoder.encode(clientRegistration.getClientId(), StandardCharsets.UTF_8),
+                URLEncoder.encode(clientRegistration.getClientSecret(), StandardCharsets.UTF_8)
+        );
+
+        // Crea la solicitud POST
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(tokenUri))
+                .header("Content-Type", "application/x-www-form-urlencoded")
+                .POST(HttpRequest.BodyPublishers.ofString(body))
+                .build();
+
+        // Envía la solicitud
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        logger.info("Response: " + response.body());
+
+        // Maneja la respuesta
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Error al obtener el token: " + response.body());
+        }
+
+        // Extrae el access_token
+        JSONObject jsonResponse = new JSONObject(response.body());
+        if (!jsonResponse.has("access_token")) {
+            throw new RuntimeException("El servidor no devolvió un access_token.");
+        }
+        String accessToken = jsonResponse.getString("access_token");
+        String refreshToken = jsonResponse.getString("refresh_token");
+        String idToken=jsonResponse.getString("id_token");
+        Wso2SecurityConfig wso2SecurityConfig = Wso2SecurityConfig.create();
+        String key=wso2SecurityConfig.getPropertyByKey("external.authentication.proxyTokenHeader","X-Access-Tocken");
+        httpRequest.getSession().setAttribute(key,accessToken);
+        httpRequest.getSession().setAttribute("refresh_token",refreshToken);
+        httpRequest.getSession().setAttribute("id_token",idToken);
+        logger.info("AccessToken: " + accessToken);
+        return accessToken;
+    }
+
     public String getAccessToken(String code, String codeVerifier) throws Exception {
         logger.info("getAccessToken using PKCE...");
 
@@ -360,6 +527,15 @@ public class Wso2AuthenticatorClient {
         }
         AuthenticationStore.getInstance().setTokenModel(TokenResponseModel.fromJson(jsonResponse));
         String accessToken = jsonResponse.getString("access_token");
+        String refreshToken = jsonResponse.getString("refresh_token");
+        String idToken=jsonResponse.getString("id_token");
+        Wso2SecurityConfig wso2SecurityConfig = Wso2SecurityConfig.create();
+        String key=wso2SecurityConfig.getPropertyByKey("external.authentication.proxyTokenHeader","X-Access-Tocken");
+        if(getServletRequest()!=null) {
+            getServletRequest().getSession().setAttribute(key, accessToken);
+            getServletRequest().getSession().setAttribute("refresh_token", refreshToken);
+            getServletRequest().getSession().setAttribute("id_token", idToken);
+        }
         logger.info("AccessToken: " + accessToken);
         return accessToken;
     }
